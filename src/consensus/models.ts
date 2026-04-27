@@ -75,8 +75,8 @@ export async function callModel(
     if (sigResp.ok) {
       teeSignature = await sigResp.json();
     }
-  } catch {
-    // signature fetch is best-effort
+  } catch (err: any) {
+    console.error(`Signature fetch failed for ${config.name}: ${err.message}`);
   }
   const tSigEnd = performance.now();
 

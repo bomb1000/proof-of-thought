@@ -48,7 +48,8 @@ export class AXLClient {
     try {
       const parsed = JSON.parse(body);
       return Array.isArray(parsed) ? parsed : [parsed];
-    } catch {
+    } catch (err: any) {
+      console.error(`recv JSON parse failed: ${err.message}`);
       return [{ from: "unknown", data: body }];
     }
   }

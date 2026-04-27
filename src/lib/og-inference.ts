@@ -5,10 +5,8 @@ const { createZGComputeNetworkBroker, createZGComputeNetworkReadOnlyBroker } =
   require("@0glabs/0g-serving-broker");
 const { ethers } = require("ethers");
 
-export interface ModelConfig {
-  name: string;
-  providerAddress: string;
-}
+export type { ModelConfig } from "../types/index.js";
+import type { ModelConfig } from "../types/index.js";
 
 export interface InferenceResult {
   model: string;
@@ -78,11 +76,11 @@ export async function callModel(
   const t0 = performance.now();
 
   const { endpoint, model: modelId } =
-    await broker.inference.getServiceMetadata(model.providerAddress);
+    await broker.inference.getServiceMetadata(model.provider);
   const tMeta = performance.now();
 
   const headers = await broker.inference.getRequestHeaders(
-    model.providerAddress,
+    model.provider,
     query
   );
   const tHeaders = performance.now();
@@ -115,7 +113,7 @@ export async function callModel(
   try {
     const usageJson = data.usage ? JSON.stringify(data.usage) : undefined;
     verified = await broker.inference.processResponse(
-      model.providerAddress,
+      model.provider,
       chatID,
       usageJson
     );
@@ -126,7 +124,7 @@ export async function callModel(
 
   return {
     model: model.name,
-    provider: model.providerAddress,
+    provider: model.provider,
     content,
     chatID,
     teeVerified: verified,

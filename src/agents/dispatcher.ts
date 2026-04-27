@@ -77,8 +77,8 @@ export async function collectResponses(
           responses.push(parsed);
         }
       }
-    } catch {
-      // recv can fail transiently
+    } catch (err: any) {
+      console.error(`recv failed: ${err.message}`);
     }
 
     if (responses.length < expectedCount) {

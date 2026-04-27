@@ -5,8 +5,8 @@ const { ethers } = require("ethers");
 
 import type { PoTReport } from "../types/index.js";
 
-const INDEXER_RPC = "https://indexer-storage-testnet-turbo.0g.ai";
-const KV_RPC = "http://3.101.147.150:6789";
+const INDEXER_RPC = process.env.OG_INDEXER_RPC || "https://indexer-storage-testnet-turbo.0g.ai";
+const KV_RPC = process.env.OG_KV_RPC || "http://3.101.147.150:6789";
 
 export function getStreamId(address: string): string {
   return ethers.keccak256(ethers.toUtf8Bytes(`pot-reports-${address}`));

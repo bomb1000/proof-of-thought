@@ -1,13 +1,4 @@
-import { createRequire } from "module";
-import { config } from "dotenv";
-
-config();
-
-const require = createRequire(import.meta.url);
-const { createZGComputeNetworkBroker } = require("@0glabs/0g-serving-broker");
-const { ethers } = require("ethers");
-
-import type { ModelConfig, PoTReport } from "../types/index.js";
+import type { PoTReport } from "../types/index.js";
 import { callModelsParallel } from "./models.js";
 import { buildConsensus } from "./comparator.js";
 import { buildReport, formatReport } from "./report.js";
@@ -16,28 +7,8 @@ import {
   registerReportOnChain,
   getRegistryAddress,
 } from "../contracts/registry.js";
-
-const TESTNET_MODELS: ModelConfig[] = [
-  {
-    name: "qwen/qwen-2.5-7b-instruct",
-    provider: "0xa48f01287233509FD694a22Bf840225062E67836",
-  },
-];
-
-const MAINNET_MODELS: ModelConfig[] = [
-  {
-    name: "deepseek/deepseek-chat-v3-0324",
-    provider: "0x1B3AAef3ae5050EEE04ea38cD4B087472BD85EB0",
-  },
-  {
-    name: "zai-org/GLM-5-FP8",
-    provider: "0xd9966e13a6026Fcca4b13E7ff95c94DE268C471C",
-  },
-  {
-    name: "qwen3.6-plus",
-    provider: "0x992e6396157Dc4f22E74F2231235D7DE62696db5",
-  },
-];
+import { TESTNET_MODELS, MAINNET_MODELS } from "../config/models.js";
+import { getInfra } from "../config/infra.js";
 
 export async function runConsensus(
   query: string,
@@ -46,30 +17,18 @@ export async function runConsensus(
   const network = options?.network ?? "testnet";
   const shouldStore = options?.store ?? true;
 
-  const rpcUrl =
-    network === "mainnet"
-      ? "https://evmrpc.0g.ai"
-      : "https://evmrpc-testnet.0g.ai";
+  const infra = await getInfra(network);
 
-  const privateKey = process.env.OG_PRIVATE_KEY;
-  if (!privateKey) throw new Error("OG_PRIVATE_KEY not set");
-
-  const provider = new ethers.JsonRpcProvider(rpcUrl);
-  const wallet = new ethers.Wallet(privateKey, provider);
-  const address = await wallet.getAddress();
-
-  console.log(`\nWallet:  ${address}`);
-  const balance = await provider.getBalance(address);
-  console.log(`Balance: ${ethers.formatEther(balance)} 0G`);
+  console.log(`\nWallet:  ${infra.address}`);
+  console.log(`Balance: ${infra.balance} 0G`);
   console.log(`Network: ${network}\n`);
 
-  const broker = await createZGComputeNetworkBroker(wallet);
   const models = network === "mainnet" ? MAINNET_MODELS : TESTNET_MODELS;
 
   // Step 1: Call models
   console.log(`Dispatching query to ${models.length} model(s)...`);
   const t0 = performance.now();
-  const responses = await callModelsParallel(broker, models, query);
+  const responses = await callModelsParallel(infra.broker, models, query);
   const tModels = performance.now();
   console.log(
     `Models responded in ${((tModels - t0) / 1000).toFixed(1)}s (${responses.length}/${models.length} succeeded)\n`
@@ -94,7 +53,7 @@ export async function runConsensus(
   if (shouldStore) {
     console.log("Storing PoT Report on 0G Storage...");
     try {
-      const { txHash, rootHash } = await storeReport(report, rpcUrl, wallet);
+      const { txHash, rootHash } = await storeReport(report, infra.rpcUrl, infra.wallet);
       report.storedOn = `0g://${rootHash}`;
       const tStore = performance.now();
       console.log(`Stored in ${((tStore - tConsensus) / 1000).toFixed(1)}s`);
@@ -103,7 +62,7 @@ export async function runConsensus(
 
       // Verify storage round-trip
       console.log("Verifying storage retrieval...");
-      const verification = await verifyStorageRoundTrip(address, report);
+      const verification = await verifyStorageRoundTrip(infra.address, report);
       if (verification.verified) {
         console.log("  Storage verified: potHash matches\n");
       } else {
@@ -117,7 +76,7 @@ export async function runConsensus(
           const chainResult = await registerReportOnChain(
             report.potHash,
             rootHash,
-            wallet
+            infra.wallet
           );
           console.log(`  Chain TX:    ${chainResult.txHash}`);
           console.log(`  Block:       ${chainResult.blockNumber}\n`);

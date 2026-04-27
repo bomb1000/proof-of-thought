@@ -4,13 +4,12 @@ import { config } from "dotenv";
 config();
 
 const require = createRequire(import.meta.url);
-const { createZGComputeNetworkBroker } = require("@0glabs/0g-serving-broker");
 const { ethers } = require("ethers");
 const express = require("express");
 const cors = require("cors");
 const { paymentMiddleware } = require("x402-express");
 
-import type { ModelConfig, ModelResponse, PoTReport } from "../types/index.js";
+import type { ModelResponse, PoTReport } from "../types/index.js";
 import { callModel } from "../consensus/models.js";
 import { buildConsensus } from "../consensus/comparator.js";
 import { buildReport } from "../consensus/report.js";
@@ -19,99 +18,56 @@ import {
   registerReportOnChain,
   getRegistryAddress,
 } from "../contracts/registry.js";
+import { TESTNET_MODELS, MAINNET_MODELS, AGENT_NAMES } from "../config/models.js";
+import { getInfra } from "../config/infra.js";
 
+const MAX_REPORTS = 100;
 const reportStore = new Map<string, PoTReport>();
 
-const PAYMENT_ADDRESS =
-  process.env.PAYMENT_ADDRESS ||
-  (process.env.OG_PRIVATE_KEY
-    ? (() => {
-        try {
-          const w = new ethers.Wallet(process.env.OG_PRIVATE_KEY);
-          return w.address as string;
-        } catch {
-          return "0x0000000000000000000000000000000000000000";
-        }
-      })()
-    : "0x0000000000000000000000000000000000000000");
+function addReport(id: string, report: PoTReport) {
+  if (reportStore.size >= MAX_REPORTS) {
+    const oldest = reportStore.keys().next().value;
+    if (oldest !== undefined) reportStore.delete(oldest);
+  }
+  reportStore.set(id, report);
+}
+
+let PAYMENT_ADDRESS: string = process.env.PAYMENT_ADDRESS || "";
+if (!PAYMENT_ADDRESS && process.env.OG_PRIVATE_KEY) {
+  try {
+    const w = new ethers.Wallet(process.env.OG_PRIVATE_KEY);
+    PAYMENT_ADDRESS = w.address as string;
+  } catch (err: any) {
+    console.warn(`Failed to derive payment address from OG_PRIVATE_KEY: ${err.message}`);
+  }
+}
 
 const FACILITATOR_URL =
   process.env.X402_FACILITATOR_URL || "https://x402.org/facilitator";
-
-const TESTNET_MODELS: ModelConfig[] = [
-  {
-    name: "qwen/qwen-2.5-7b-instruct",
-    provider: "0xa48f01287233509FD694a22Bf840225062E67836",
-  },
-];
-
-const MAINNET_MODELS: ModelConfig[] = [
-  {
-    name: "deepseek/deepseek-chat-v3-0324",
-    provider: "0x1B3AAef3ae5050EEE04ea38cD4B087472BD85EB0",
-  },
-  {
-    name: "zai-org/GLM-5-FP8",
-    provider: "0xd9966e13a6026Fcca4b13E7ff95c94DE268C471C",
-  },
-  {
-    name: "qwen3.6-plus",
-    provider: "0x992e6396157Dc4f22E74F2231235D7DE62696db5",
-  },
-];
-
-const AGENT_NAMES: Record<string, string> = {
-  "qwen/qwen-2.5-7b-instruct": "Agent Alpha",
-  "deepseek/deepseek-chat-v3-0324": "Agent Beta",
-  "zai-org/GLM-5-FP8": "Agent Gamma",
-  "qwen3.6-plus": "Agent Alpha",
-};
-
-function getRpcUrl(network: "testnet" | "mainnet"): string {
-  return network === "mainnet"
-    ? "https://evmrpc.0g.ai"
-    : "https://evmrpc-testnet.0g.ai";
-}
-
-async function getWalletInfo(network: "testnet" | "mainnet") {
-  const privateKey = process.env.OG_PRIVATE_KEY;
-  if (!privateKey) throw new Error("OG_PRIVATE_KEY not set");
-
-  const rpcUrl = getRpcUrl(network);
-  const provider = new ethers.JsonRpcProvider(rpcUrl);
-  const wallet = new ethers.Wallet(privateKey, provider);
-  const address = await wallet.getAddress();
-  const balance = await provider.getBalance(address);
-
-  return {
-    address,
-    balance: ethers.formatEther(balance),
-    network,
-    wallet,
-    provider,
-    rpcUrl,
-  };
-}
 
 const app = express();
 app.use(cors({ origin: true }));
 app.use(express.json());
 
-app.use(
-  paymentMiddleware(
-    PAYMENT_ADDRESS,
-    {
-      "/api/report/:id": {
-        price: "$0.01",
-        network: "base-sepolia",
-        config: {
-          description: "Access to TEE-verified PoT Report",
+if (PAYMENT_ADDRESS) {
+  app.use(
+    paymentMiddleware(
+      PAYMENT_ADDRESS,
+      {
+        "/api/report/:id": {
+          price: "$0.01",
+          network: "base-sepolia",
+          config: {
+            description: "Access to TEE-verified PoT Report",
+          },
         },
       },
-    },
-    { url: FACILITATOR_URL }
-  )
-);
+      { url: FACILITATOR_URL }
+    )
+  );
+} else {
+  console.warn("No valid PAYMENT_ADDRESS — x402 payment middleware disabled");
+}
 
 app.get("/api/reports", (_req: any, res: any) => {
   const reports = Array.from(reportStore.entries()).map(([id, r]) => ({
@@ -151,7 +107,7 @@ app.get("/api/status", async (_req: any, res: any) => {
   try {
     const network =
       ((_req.query?.network as string) as "testnet" | "mainnet") || "testnet";
-    const info = await getWalletInfo(network);
+    const info = await getInfra(network);
     const models = network === "mainnet" ? MAINNET_MODELS : TESTNET_MODELS;
 
     const agents = models.map((m) => ({
@@ -164,7 +120,7 @@ app.get("/api/status", async (_req: any, res: any) => {
     res.json({
       wallet: info.address,
       balance: info.balance,
-      network: info.network,
+      network,
       agents,
       registryAddress: getRegistryAddress(),
     });
@@ -188,14 +144,19 @@ app.post("/api/consensus", async (req: any, res: any) => {
     Connection: "keep-alive",
   });
 
+  let clientDisconnected = false;
+  res.on("close", () => {
+    clientDisconnected = true;
+  });
+
   function sendEvent(event: string, data: any) {
+    if (clientDisconnected) return;
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   }
 
   try {
-    const info = await getWalletInfo(network);
+    const info = await getInfra(network);
     const models = network === "mainnet" ? MAINNET_MODELS : TESTNET_MODELS;
-    const broker = await createZGComputeNetworkBroker(info.wallet);
 
     sendEvent("pipeline_started", {
       query,
@@ -221,7 +182,7 @@ app.post("/api/consensus", async (req: any, res: any) => {
     for (const m of models) {
       const agentName = AGENT_NAMES[m.name] || m.name;
       try {
-        const response = await callModel(broker, m, query);
+        const response = await callModel(info.broker, m, query);
         responses.push(response);
         sendEvent("agent_responded", {
           name: agentName,
@@ -326,7 +287,7 @@ app.post("/api/consensus", async (req: any, res: any) => {
       });
     }
 
-    reportStore.set(report.id, report);
+    addReport(report.id, report);
 
     const totalTime = performance.now() - t0;
     sendEvent("report_complete", {
