@@ -72,6 +72,39 @@ export async function retrieveReportByKey(
   return JSON.parse(decoded);
 }
 
+export function verifyReportIntegrity(
+  original: PoTReport,
+  retrieved: PoTReport | null
+): { verified: boolean; error?: string } {
+  if (!retrieved) {
+    return { verified: false, error: "Report not found in KV store" };
+  }
+
+  if (retrieved.potHash !== original.potHash) {
+    return {
+      verified: false,
+      error: `Hash mismatch: expected ${original.potHash}, got ${retrieved.potHash}`,
+    };
+  }
+
+  return { verified: true };
+}
+
+export async function verifyStorageRoundTrip(
+  address: string,
+  report: PoTReport,
+  delayMs = 2000
+): Promise<{ verified: boolean; error?: string }> {
+  await new Promise((r) => setTimeout(r, delayMs));
+
+  try {
+    const retrieved = await retrieveReportByKey(address, report.id);
+    return verifyReportIntegrity(report, retrieved);
+  } catch (err: any) {
+    return { verified: false, error: err.message };
+  }
+}
+
 function extractJson(raw: string): PoTReport {
   const jsonStart = raw.indexOf("{");
   if (jsonStart < 0) {
