@@ -8,8 +8,9 @@ const { createZGComputeNetworkBroker } = require("@0glabs/0g-serving-broker");
 const { ethers } = require("ethers");
 const express = require("express");
 const cors = require("cors");
+const { paymentMiddleware } = require("x402-express");
 
-import type { ModelConfig, ModelResponse } from "../types/index.js";
+import type { ModelConfig, ModelResponse, PoTReport } from "../types/index.js";
 import { callModel } from "../consensus/models.js";
 import { buildConsensus } from "../consensus/comparator.js";
 import { buildReport } from "../consensus/report.js";
@@ -18,6 +19,24 @@ import {
   registerReportOnChain,
   getRegistryAddress,
 } from "../contracts/registry.js";
+
+const reportStore = new Map<string, PoTReport>();
+
+const PAYMENT_ADDRESS =
+  process.env.PAYMENT_ADDRESS ||
+  (process.env.OG_PRIVATE_KEY
+    ? (() => {
+        try {
+          const w = new ethers.Wallet(process.env.OG_PRIVATE_KEY);
+          return w.address as string;
+        } catch {
+          return "0x0000000000000000000000000000000000000000";
+        }
+      })()
+    : "0x0000000000000000000000000000000000000000");
+
+const FACILITATOR_URL =
+  process.env.X402_FACILITATOR_URL || "https://x402.org/facilitator";
 
 const TESTNET_MODELS: ModelConfig[] = [
   {
@@ -77,6 +96,56 @@ async function getWalletInfo(network: "testnet" | "mainnet") {
 const app = express();
 app.use(cors({ origin: true }));
 app.use(express.json());
+
+app.use(
+  paymentMiddleware(
+    PAYMENT_ADDRESS,
+    {
+      "/api/report/:id": {
+        price: "$0.01",
+        network: "base-sepolia",
+        config: {
+          description: "Access to TEE-verified PoT Report",
+        },
+      },
+    },
+    { url: FACILITATOR_URL }
+  )
+);
+
+app.get("/api/reports", (_req: any, res: any) => {
+  const reports = Array.from(reportStore.entries()).map(([id, r]) => ({
+    id,
+    query: r.query,
+    timestamp: r.timestamp,
+    consensusScore: r.consensus.agreementScore,
+    modelCount: r.responses.length,
+    potHash: r.potHash,
+    storedOn: r.storedOn,
+  }));
+  res.json({ reports, paymentInfo: { price: "$0.01", network: "base-sepolia" } });
+});
+
+app.get("/api/report/:id", (req: any, res: any) => {
+  const report = reportStore.get(req.params.id);
+  if (!report) {
+    res.status(404).json({ error: "Report not found" });
+    return;
+  }
+
+  res.json({
+    report,
+    receipt: {
+      reportId: report.id,
+      potHash: report.potHash,
+      amount: "$0.01",
+      network: "base-sepolia",
+      proofChain: report.proofChain,
+      consensusScore: report.consensus.agreementScore,
+      timestamp: report.timestamp,
+    },
+  });
+});
 
 app.get("/api/status", async (_req: any, res: any) => {
   try {
@@ -257,6 +326,8 @@ app.post("/api/consensus", async (req: any, res: any) => {
       });
     }
 
+    reportStore.set(report.id, report);
+
     const totalTime = performance.now() - t0;
     sendEvent("report_complete", {
       report: {
@@ -270,6 +341,12 @@ app.post("/api/consensus", async (req: any, res: any) => {
         responses: report.responses,
       },
       totalTime,
+      reportUrl: `/api/report/${report.id}`,
+      paymentInfo: {
+        price: "$0.01",
+        network: "base-sepolia",
+        payTo: PAYMENT_ADDRESS,
+      },
     });
   } catch (err: any) {
     sendEvent("error", { message: err.message });

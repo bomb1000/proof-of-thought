@@ -4,7 +4,7 @@ import { useState, useRef, useCallback, useEffect } from "react"
 import {
   ShieldCheck, CheckCircle, AlertTriangle, Network, MessageSquare,
   Search, Copy, Database, Link, Cpu, Zap, Clock, XCircle, Loader2,
-  WifiOff,
+  WifiOff, DollarSign,
 } from "lucide-react"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"
@@ -46,6 +46,13 @@ interface ConsensusData {
   divergences: Divergence[]
   verifiedCount: number
   totalCount: number
+}
+
+interface PaymentInfo {
+  price: string
+  network: string
+  payTo: string
+  reportUrl: string
 }
 
 interface ReportData {
@@ -117,6 +124,7 @@ export default function Dashboard() {
   const [feed, setFeed] = useState<FeedItem[]>([])
   const [consensus, setConsensus] = useState<ConsensusData | null>(null)
   const [report, setReport] = useState<ReportData | null>(null)
+  const [paymentInfo, setPaymentInfo] = useState<PaymentInfo | null>(null)
   const [proofSteps, setProofSteps] = useState<ProofStep[]>(DEFAULT_PROOF_STEPS)
   const [query, setQuery] = useState("What are the top 3 risks of lending ETH on Aave v3 right now?")
   const [running, setRunning] = useState(false)
@@ -184,6 +192,7 @@ export default function Dashboard() {
     setFeed([])
     setConsensus(null)
     setReport(null)
+    setPaymentInfo(null)
     setProofSteps(DEFAULT_PROOF_STEPS.map((s) => ({ ...s })))
     setAgents((prev) => prev.map((a) => ({ ...a, status: "idle" as const, timings: undefined })))
 
@@ -381,6 +390,14 @@ export default function Dashboard() {
             verifiedCount: r.proofChain.filter((p: any) => p.teeVerified).length,
             totalCount: r.proofChain.length,
           }))
+        }
+        if (data.paymentInfo && data.reportUrl) {
+          setPaymentInfo({
+            price: data.paymentInfo.price,
+            network: data.paymentInfo.network,
+            payTo: data.paymentInfo.payTo,
+            reportUrl: data.reportUrl,
+          })
         }
         break
 
@@ -603,6 +620,52 @@ export default function Dashboard() {
                   <div className="font-mono text-[10px] text-accent truncate">{report.storedOn}</div>
                 </>
               )}
+            </div>
+          )}
+
+          {paymentInfo && report && (
+            <div className="border-t border-border pt-3 mt-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <DollarSign size={14} className="text-accent" />
+                <h3 className="text-[10px] font-semibold tracking-widest text-muted uppercase">View Full Report</h3>
+              </div>
+              <div className="rounded-lg border border-accent/20 bg-accent/[0.04] p-3 space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted">Price</span>
+                  <span className="font-semibold text-emerald">{paymentInfo.price} USDC</span>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted">Network</span>
+                  <span className="font-mono text-[10px]">{paymentInfo.network}</span>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted">Pay to</span>
+                  <span className="font-mono text-[10px] truncate max-w-[140px]">{paymentInfo.payTo}</span>
+                </div>
+                <div className="text-[10px] text-muted mt-2">
+                  Report ID: <span className="font-mono text-accent">{report.id}</span>
+                </div>
+                <div className="mt-2 p-2 bg-background rounded border border-border">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[9px] text-muted uppercase tracking-wider">curl command</span>
+                    <button
+                      className="text-muted hover:text-foreground"
+                      onClick={() => navigator.clipboard?.writeText(
+                        `curl -s ${API_BASE}${paymentInfo.reportUrl}`
+                      )}
+                    >
+                      <Copy size={10} />
+                    </button>
+                  </div>
+                  <code className="text-[9px] text-accent break-all block">
+                    curl -s {API_BASE}{paymentInfo.reportUrl}
+                  </code>
+                  <div className="text-[9px] text-muted mt-1.5">
+                    Without payment header, returns HTTP 402 with payment requirements.
+                    x402-compatible clients handle payment automatically.
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </div>
