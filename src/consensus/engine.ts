@@ -11,6 +11,7 @@ import type { ModelConfig, PoTReport } from "../types/index.js";
 import { callModelsParallel } from "./models.js";
 import { buildConsensus } from "./comparator.js";
 import { buildReport, formatReport } from "./report.js";
+import { storeReport } from "../storage/store.js";
 
 const TESTNET_MODELS: ModelConfig[] = [
   {
@@ -36,9 +37,10 @@ const MAINNET_MODELS: ModelConfig[] = [
 
 export async function runConsensus(
   query: string,
-  options?: { network?: "testnet" | "mainnet" }
+  options?: { store?: boolean; network?: "testnet" | "mainnet" }
 ): Promise<PoTReport> {
   const network = options?.network ?? "testnet";
+  const shouldStore = options?.store ?? true;
 
   const rpcUrl =
     network === "mainnet"
@@ -60,6 +62,7 @@ export async function runConsensus(
   const broker = await createZGComputeNetworkBroker(wallet);
   const models = network === "mainnet" ? MAINNET_MODELS : TESTNET_MODELS;
 
+  // Step 1: Call models
   console.log(`Dispatching query to ${models.length} model(s)...`);
   const t0 = performance.now();
   const responses = await callModelsParallel(broker, models, query);
@@ -72,6 +75,7 @@ export async function runConsensus(
     throw new Error("No models responded successfully");
   }
 
+  // Step 2: Build consensus
   console.log("Building consensus...");
   const consensus = buildConsensus(responses);
   const tConsensus = performance.now();
@@ -79,8 +83,25 @@ export async function runConsensus(
     `Consensus built in ${(tConsensus - tModels).toFixed(0)}ms — agreement: ${(consensus.agreementScore * 100).toFixed(1)}%\n`
   );
 
+  // Step 3: Build report
   const report = buildReport(query, responses, consensus);
 
+  // Step 4: Store on 0G
+  if (shouldStore) {
+    console.log("Storing PoT Report on 0G Storage...");
+    try {
+      const { txHash, rootHash } = await storeReport(report, rpcUrl, wallet);
+      report.storedOn = `0g://${rootHash}`;
+      const tStore = performance.now();
+      console.log(`Stored in ${((tStore - tConsensus) / 1000).toFixed(1)}s`);
+      console.log(`  TX:   ${txHash}`);
+      console.log(`  Root: ${rootHash}\n`);
+    } catch (err: any) {
+      console.error(`Storage failed: ${err.message}\n`);
+    }
+  }
+
+  // Print formatted report
   console.log(formatReport(report));
 
   const totalTime = performance.now() - t0;
@@ -89,22 +110,27 @@ export async function runConsensus(
   return report;
 }
 
+// CLI entry point
 if (import.meta.url === `file://${process.argv[1]}`) {
   const query =
     process.argv[2] ||
     "What are the top 3 risks of lending ETH on Aave v3 right now?";
 
   const network = (process.argv[3] as "testnet" | "mainnet") || "testnet";
+  const store = process.argv[4] !== "--no-store";
 
   console.log("═".repeat(60));
   console.log("  PROOF OF THOUGHT — Consensus Engine");
   console.log("═".repeat(60));
   console.log(`\nQuery: "${query}"`);
 
-  runConsensus(query, { network })
+  runConsensus(query, { network, store })
     .then((report) => {
       console.log(`\nReport ID: ${report.id}`);
       console.log(`PoT Hash:  ${report.potHash}`);
+      if (report.storedOn) {
+        console.log(`Stored:    ${report.storedOn}`);
+      }
     })
     .catch((err) => {
       console.error(`\nFatal: ${err.message}`);
