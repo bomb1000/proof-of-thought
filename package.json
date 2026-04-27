@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/index.ts",
+    "server": "tsx src/server/api.ts",
     "build": "tsc --project tsconfig.build.json",
     "start": "node build/index.js",
     "test": "vitest run",
