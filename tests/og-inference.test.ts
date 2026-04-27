@@ -45,7 +45,7 @@ function makeMockBroker(options?: {
 
 const TEST_MODEL: ModelConfig = {
   name: "qwen/qwen-2.5-7b-instruct",
-  providerAddress: "0xa48f01287233509FD694a22Bf840225062E67836",
+  provider: "0xa48f01287233509FD694a22Bf840225062E67836",
 };
 
 const TEST_QUERY = "What are the risks of lending ETH on Aave v3?";
@@ -60,7 +60,7 @@ describe("callModel", () => {
     const result = await callModel(broker, TEST_MODEL, TEST_QUERY);
 
     expect(result.model).toBe(TEST_MODEL.name);
-    expect(result.provider).toBe(TEST_MODEL.providerAddress);
+    expect(result.provider).toBe(TEST_MODEL.provider);
     expect(result.content).toContain("Smart contract vulnerabilities");
     expect(result.chatID).toBe("test-chat-id-123");
     expect(result.teeVerified).toBe(true);
@@ -103,7 +103,7 @@ describe("callModel", () => {
     await callModel(broker, TEST_MODEL, TEST_QUERY);
 
     expect(broker.inference.processResponse).toHaveBeenCalledWith(
-      TEST_MODEL.providerAddress,
+      TEST_MODEL.provider,
       "test-chat-id-123",
       JSON.stringify({
         prompt_tokens: 20,
@@ -157,8 +157,8 @@ describe("callModelsParallel", () => {
   it("calls multiple models and returns results for each", async () => {
     const broker = makeMockBroker();
     const models: ModelConfig[] = [
-      { name: "model-a", providerAddress: "0xAAA" },
-      { name: "model-b", providerAddress: "0xBBB" },
+      { name: "model-a", provider: "0xAAA" },
+      { name: "model-b", provider: "0xBBB" },
     ];
 
     const results = await callModelsParallel(broker, models, TEST_QUERY);
@@ -186,9 +186,9 @@ describe("callModelsParallel", () => {
     });
 
     const models: ModelConfig[] = [
-      { name: "model-a", providerAddress: "0xAAA" },
-      { name: "model-b", providerAddress: "0xBBB" },
-      { name: "model-c", providerAddress: "0xCCC" },
+      { name: "model-a", provider: "0xAAA" },
+      { name: "model-b", provider: "0xBBB" },
+      { name: "model-c", provider: "0xCCC" },
     ];
 
     await callModelsParallel(broker, models, TEST_QUERY);
