@@ -11,7 +11,11 @@ import type { ModelConfig, PoTReport } from "../types/index.js";
 import { callModelsParallel } from "./models.js";
 import { buildConsensus } from "./comparator.js";
 import { buildReport, formatReport } from "./report.js";
-import { storeReport } from "../storage/store.js";
+import { storeReport, verifyStorageRoundTrip } from "../storage/store.js";
+import {
+  registerReportOnChain,
+  getRegistryAddress,
+} from "../contracts/registry.js";
 
 const TESTNET_MODELS: ModelConfig[] = [
   {
@@ -95,7 +99,32 @@ export async function runConsensus(
       const tStore = performance.now();
       console.log(`Stored in ${((tStore - tConsensus) / 1000).toFixed(1)}s`);
       console.log(`  TX:   ${txHash}`);
-      console.log(`  Root: ${rootHash}\n`);
+      console.log(`  Root: ${rootHash}`);
+
+      // Verify storage round-trip
+      console.log("Verifying storage retrieval...");
+      const verification = await verifyStorageRoundTrip(address, report);
+      if (verification.verified) {
+        console.log("  Storage verified: potHash matches\n");
+      } else {
+        console.error(`  Storage verification failed: ${verification.error}\n`);
+      }
+
+      // Register on-chain if registry is configured
+      if (getRegistryAddress()) {
+        console.log("Registering report on 0G Chain...");
+        try {
+          const chainResult = await registerReportOnChain(
+            report.potHash,
+            rootHash,
+            wallet
+          );
+          console.log(`  Chain TX:    ${chainResult.txHash}`);
+          console.log(`  Block:       ${chainResult.blockNumber}\n`);
+        } catch (chainErr: any) {
+          console.error(`  On-chain registration failed: ${chainErr.message}\n`);
+        }
+      }
     } catch (err: any) {
       console.error(`Storage failed: ${err.message}\n`);
     }
