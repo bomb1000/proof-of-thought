@@ -2,7 +2,7 @@
 
 > A new consensus primitive — multiple AI models running in separate hardware enclaves independently analyze the same question, and the protocol produces a cryptographic proof of their agreement.
 >
-> *It's Proof of Work for intelligence.*
+> _It's Proof of Work for intelligence._
 
 ## What is this?
 
@@ -40,6 +40,17 @@ python scripts/setup.py
 # Start development server
 npm run dev
 ```
+
+## x402 Report Access
+
+PoT Reports are served through an x402-gated endpoint:
+
+- `GET /api/reports` lists available reports and payment metadata.
+- `GET /api/report/:id` returns the full TEE-verified report after x402 payment validation when `PAYMENT_ADDRESS` is configured.
+- `GET /api/audit` lists payment audit records.
+- `GET /api/audit/report/:id` filters audit records for a single report.
+
+Each audit record stores the report ID, PoT hash, x402 payment header hash, decoded payment payload when available, payment transaction hash, route, amount, network, request metadata, a proof-chain hash, and per-response TEE proof hashes. Payment verification stays delegated to `x402-express`; the audit trail records the evidence needed for KeeperHub-style settlement and review.
 
 ## Project Structure
 
