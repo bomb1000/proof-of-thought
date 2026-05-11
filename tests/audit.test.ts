@@ -4,6 +4,11 @@ import {
   buildPaymentAuditRecord,
   decodeXPaymentHeader,
 } from "../src/commerce/audit.js";
+import {
+  buildKeeperHubExecutionPlan,
+  hashPaymentHeader,
+  verifyRetryPaymentHeader,
+} from "../src/commerce/keeperhub.js";
 import type { PoTReport } from "../src/types/index.js";
 
 const SAMPLE_REPORT: PoTReport = {
@@ -154,5 +159,61 @@ describe("AuditTrailStore", () => {
     expect(store.list()[0].reportId).toBe("pot-second");
     expect(store.forReport(SAMPLE_REPORT.id)).toHaveLength(0);
     expect(store.forReport("pot-second")).toHaveLength(1);
+  });
+});
+
+describe("KeeperHub execution plan", () => {
+  it("plans wallet provisioning and retry gas bumps", () => {
+    const plan = buildKeeperHubExecutionPlan(
+      {
+        reportId: SAMPLE_REPORT.id,
+        amount: "$0.01",
+        network: "base-sepolia",
+        payTo: "0xPayTo",
+        paymentHeaderHash: "0xpaymentheaderhash",
+        paymentTxHash: "0xpayment",
+      },
+      { maxRetries: 2, baseDelayMs: 100, gasMultiplier: 1.2 },
+    );
+
+    expect(plan.enabled).toBe(true);
+    expect(plan.walletLabel).toBe("pot-pot-1234567890-abc123");
+    expect(plan.walletProvisioningCommands).toEqual([
+      "kh wallet add --network base-sepolia --label pot-pot-1234567890-abc123 --yes",
+      "kh wallet fund --network base-sepolia --asset ETH --min-balance 0.002 --yes",
+    ]);
+    expect(plan.retryHeaderVerification).toBe("match-x-payment-header-hash");
+    expect(plan.retryAttempts).toEqual([
+      {
+        attempt: 1,
+        delayMs: 0,
+        gasMultiplier: 1.2,
+        paymentHeaderHash: "0xpaymentheaderhash",
+      },
+      {
+        attempt: 2,
+        delayMs: 100,
+        gasMultiplier: 1.344,
+        paymentHeaderHash: "0xpaymentheaderhash",
+      },
+      {
+        attempt: 3,
+        delayMs: 200,
+        gasMultiplier: 1.5053,
+        paymentHeaderHash: "0xpaymentheaderhash",
+      },
+    ]);
+    expect(plan.auditFingerprint).toMatch(/^0x[a-f0-9]{64}$/);
+  });
+
+  it("verifies retries against the original X-PAYMENT header hash", () => {
+    const header = JSON.stringify({ txHash: "0xpayment" });
+    const headerHash = hashPaymentHeader(header);
+
+    expect(verifyRetryPaymentHeader(headerHash, header)).toBe(true);
+    expect(verifyRetryPaymentHeader(headerHash, '{"txHash":"0xother"}')).toBe(
+      false,
+    );
+    expect(verifyRetryPaymentHeader(null, header)).toBe(false);
   });
 });
