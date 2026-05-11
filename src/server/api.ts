@@ -26,6 +26,7 @@ import {
 } from "../config/models.js";
 import { getInfra } from "../config/infra.js";
 import { AuditTrailStore, buildPaymentAuditRecord } from "../commerce/audit.js";
+import { buildKeeperHubExecutionPlan } from "../commerce/keeperhub.js";
 
 const MAX_REPORTS = 100;
 const MAX_AUDIT_RECORDS = 1000;
@@ -33,6 +34,13 @@ const reportStore = new Map<string, PoTReport>();
 const auditTrail = new AuditTrailStore(MAX_AUDIT_RECORDS);
 const REPORT_PRICE = process.env.X402_REPORT_PRICE ?? "$0.01";
 const X402_NETWORK = process.env.X402_NETWORK ?? "base-sepolia";
+const KEEPERHUB_MAX_RETRIES = Number.parseInt(
+  process.env.KEEPERHUB_MAX_RETRIES ?? "3",
+  10,
+);
+const KEEPERHUB_GAS_MULTIPLIER = Number.parseFloat(
+  process.env.KEEPERHUB_GAS_MULTIPLIER ?? "1.3",
+);
 
 function addReport(id: string, report: PoTReport) {
   if (reportStore.size >= MAX_REPORTS) {
@@ -115,6 +123,20 @@ app.get("/api/report/:id", (req: any, res: any) => {
       route: `/api/report/${report.id}`,
     }),
   );
+  const keeperHubPlan = buildKeeperHubExecutionPlan(
+    {
+      reportId: report.id,
+      amount: REPORT_PRICE,
+      network: X402_NETWORK,
+      payTo: PAYMENT_ADDRESS ? PAYMENT_ADDRESS : null,
+      paymentHeaderHash: auditRecord.paymentHeaderHash,
+      paymentTxHash: auditRecord.paymentTxHash,
+    },
+    {
+      maxRetries: KEEPERHUB_MAX_RETRIES,
+      gasMultiplier: KEEPERHUB_GAS_MULTIPLIER,
+    },
+  );
 
   res.json({
     report,
@@ -130,6 +152,7 @@ app.get("/api/report/:id", (req: any, res: any) => {
       auditRecordId: auditRecord.id,
       paymentHeaderHash: auditRecord.paymentHeaderHash,
       teeProofHashes: auditRecord.teeProofHashes,
+      keeperHub: keeperHubPlan,
     },
   });
 });
