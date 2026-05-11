@@ -1,4 +1,5 @@
 import { createRequire } from "module";
+import { performance } from "node:perf_hooks";
 import { config } from "dotenv";
 
 config();
@@ -18,11 +19,20 @@ import {
   registerReportOnChain,
   getRegistryAddress,
 } from "../contracts/registry.js";
-import { TESTNET_MODELS, MAINNET_MODELS, AGENT_NAMES } from "../config/models.js";
+import {
+  TESTNET_MODELS,
+  MAINNET_MODELS,
+  AGENT_NAMES,
+} from "../config/models.js";
 import { getInfra } from "../config/infra.js";
+import { AuditTrailStore, buildPaymentAuditRecord } from "../commerce/audit.js";
 
 const MAX_REPORTS = 100;
+const MAX_AUDIT_RECORDS = 1000;
 const reportStore = new Map<string, PoTReport>();
+const auditTrail = new AuditTrailStore(MAX_AUDIT_RECORDS);
+const REPORT_PRICE = process.env.X402_REPORT_PRICE ?? "$0.01";
+const X402_NETWORK = process.env.X402_NETWORK ?? "base-sepolia";
 
 function addReport(id: string, report: PoTReport) {
   if (reportStore.size >= MAX_REPORTS) {
@@ -32,18 +42,20 @@ function addReport(id: string, report: PoTReport) {
   reportStore.set(id, report);
 }
 
-let PAYMENT_ADDRESS: string = process.env.PAYMENT_ADDRESS || "";
+let PAYMENT_ADDRESS: string = process.env.PAYMENT_ADDRESS ?? "";
 if (!PAYMENT_ADDRESS && process.env.OG_PRIVATE_KEY) {
   try {
     const w = new ethers.Wallet(process.env.OG_PRIVATE_KEY);
     PAYMENT_ADDRESS = w.address as string;
   } catch (err: any) {
-    console.warn(`Failed to derive payment address from OG_PRIVATE_KEY: ${err.message}`);
+    console.warn(
+      `Failed to derive payment address from OG_PRIVATE_KEY: ${err.message}`,
+    );
   }
 }
 
 const FACILITATOR_URL =
-  process.env.X402_FACILITATOR_URL || "https://x402.org/facilitator";
+  process.env.X402_FACILITATOR_URL ?? "https://x402.org/facilitator";
 
 const app = express();
 app.use(cors({ origin: true }));
@@ -55,15 +67,15 @@ if (PAYMENT_ADDRESS) {
       PAYMENT_ADDRESS,
       {
         "/api/report/:id": {
-          price: "$0.01",
-          network: "base-sepolia",
+          price: REPORT_PRICE,
+          network: X402_NETWORK,
           config: {
             description: "Access to TEE-verified PoT Report",
           },
         },
       },
-      { url: FACILITATOR_URL }
-    )
+      { url: FACILITATOR_URL },
+    ),
   );
 } else {
   console.warn("No valid PAYMENT_ADDRESS — x402 payment middleware disabled");
@@ -79,7 +91,10 @@ app.get("/api/reports", (_req: any, res: any) => {
     potHash: r.potHash,
     storedOn: r.storedOn,
   }));
-  res.json({ reports, paymentInfo: { price: "$0.01", network: "base-sepolia" } });
+  res.json({
+    reports,
+    paymentInfo: { price: REPORT_PRICE, network: X402_NETWORK },
+  });
 });
 
 app.get("/api/report/:id", (req: any, res: any) => {
@@ -89,24 +104,48 @@ app.get("/api/report/:id", (req: any, res: any) => {
     return;
   }
 
+  const auditRecord = auditTrail.add(
+    buildPaymentAuditRecord({
+      report,
+      getHeader: (name) => req.get(name) as string | undefined,
+      ipAddress: req.ip as string | undefined,
+      amount: REPORT_PRICE,
+      network: X402_NETWORK,
+      payTo: PAYMENT_ADDRESS,
+      route: `/api/report/${report.id}`,
+    }),
+  );
+
   res.json({
     report,
     receipt: {
       reportId: report.id,
       potHash: report.potHash,
-      amount: "$0.01",
-      network: "base-sepolia",
+      amount: REPORT_PRICE,
+      network: X402_NETWORK,
+      payTo: PAYMENT_ADDRESS ? PAYMENT_ADDRESS : null,
       proofChain: report.proofChain,
       consensusScore: report.consensus.agreementScore,
       timestamp: report.timestamp,
+      auditRecordId: auditRecord.id,
+      paymentHeaderHash: auditRecord.paymentHeaderHash,
+      teeProofHashes: auditRecord.teeProofHashes,
     },
   });
+});
+
+app.get("/api/audit", (_req: any, res: any) => {
+  res.json({ auditTrail: auditTrail.list() });
+});
+
+app.get("/api/audit/report/:id", (req: any, res: any) => {
+  res.json({ auditTrail: auditTrail.forReport(req.params.id) });
 });
 
 app.get("/api/status", async (_req: any, res: any) => {
   try {
     const network =
-      ((_req.query?.network as string) as "testnet" | "mainnet") || "testnet";
+      (_req.query?.network as string as "testnet" | "mainnet") || "testnet";
     const info = await getInfra(network);
     const models = network === "mainnet" ? MAINNET_MODELS : TESTNET_MODELS;
 
@@ -241,7 +280,7 @@ app.post("/api/consensus", async (req: any, res: any) => {
       const { txHash, rootHash } = await storeReport(
         report,
         info.rpcUrl,
-        info.wallet
+        info.wallet,
       );
       report.storedOn = `0g://${rootHash}`;
       const tStore = performance.now();
@@ -254,10 +293,7 @@ app.post("/api/consensus", async (req: any, res: any) => {
       });
 
       // Verify storage
-      const verification = await verifyStorageRoundTrip(
-        info.address,
-        report
-      );
+      const verification = await verifyStorageRoundTrip(info.address, report);
       sendEvent("storage_verified", {
         verified: verification.verified,
         error: verification.error,
@@ -269,7 +305,7 @@ app.post("/api/consensus", async (req: any, res: any) => {
           const chainResult = await registerReportOnChain(
             report.potHash,
             rootHash,
-            info.wallet
+            info.wallet,
           );
           sendEvent("chain_registered", {
             txHash: chainResult.txHash,
@@ -304,8 +340,8 @@ app.post("/api/consensus", async (req: any, res: any) => {
       totalTime,
       reportUrl: `/api/report/${report.id}`,
       paymentInfo: {
-        price: "$0.01",
-        network: "base-sepolia",
+        price: REPORT_PRICE,
+        network: X402_NETWORK,
         payTo: PAYMENT_ADDRESS,
       },
     });
@@ -316,7 +352,7 @@ app.post("/api/consensus", async (req: any, res: any) => {
   res.end();
 });
 
-const PORT = process.env.API_PORT || 3001;
+const PORT = process.env.API_PORT ?? 3001;
 app.listen(PORT, () => {
   console.log(`PoT API server listening on http://localhost:${PORT}`);
 });
