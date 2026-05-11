@@ -52,6 +52,8 @@ PoT Reports are served through an x402-gated endpoint:
 
 Each audit record stores the report ID, PoT hash, x402 payment header hash, decoded payment payload when available, payment transaction hash, route, amount, network, request metadata, a proof-chain hash, and per-response TEE proof hashes. Payment verification stays delegated to `x402-express`; the audit trail records the evidence needed for KeeperHub-style settlement and review.
 
+The receipt also includes a KeeperHub execution plan. It binds each retry to the original `X-PAYMENT` header hash, applies exponential backoff with configurable gas bumping, and surfaces the `kh wallet add` / `kh wallet fund` commands an agent can run before triggering paid report delivery.
+
 ## Project Structure
 
 ```
